@@ -84,13 +84,23 @@ class WebSocketASREngine:
     5. on_final 触发后 → 意图路由 → LLM 对话 → TTS → 播放
     """
 
-    def __init__(self, api_key: str, sample_rate: int = 16000, ws_url: str = None):
+    def __init__(self, api_key: str, sample_rate: int = 16000, ws_url: str = None,
+                 model: str = "fun-asr-realtime"):
+        """
+        初始化 ASR 引擎。
+
+        教学说明（model 参数）：
+        - fun-asr-realtime: 通用实时识别，支持7种方言+26种口音
+        - gummy-chat-v1: 对话场景专用（可选升级）
+        - 通过 .env 的 ASR_MODEL 配置，方便切换模型测试
+        """
         if not api_key:
             raise RuntimeError("ASR: 缺少 DASHSCOPE_API_KEY")
         dashscope.api_key = api_key
         if ws_url:
             dashscope.base_websocket_api_url = ws_url
 
+        self.model = model              # ASR 模型名，从 .env 读取
         self.sample_rate = sample_rate
         self.recognition: Optional[Recognition] = None
         self.callback: Optional[WebSocketASRCallback] = None
@@ -103,10 +113,11 @@ class WebSocketASREngine:
         """启动 ASR 识别会话"""
         self.callback = WebSocketASRCallback(on_partial, on_final)
         self.recognition = Recognition(
-            model="fun-asr-realtime",           # 阿里云实时 ASR 模型
+            model=self.model,                   # ASR 模型，从 .env 配置读取
             format="pcm",                       # 音频格式：原始 PCM
             sample_rate=self.sample_rate,        # 采样率：16kHz
             semantic_punctuation_enabled=False,  # 不自动加标点（语音对话不需要）
+            disfluency_removal_enabled=True,    # 🆕 去赘词：去掉"嗯""那个"等口语废话
             callback=self.callback,
         )
         self.recognition.start()

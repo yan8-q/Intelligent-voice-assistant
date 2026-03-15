@@ -68,7 +68,7 @@ const uint16_t SERVER_PORT = 8081;
 
 #define RING_BUF_SIZE    16384  // 16KB ≈ 512ms @16kHz mono16（从8KB扩大，吸收TTS分块间隙）
 #define AUDIO_CHUNK_SIZE 320    // 每块 10ms @16kHz = 320 字节
-#define PREBUFFER_MS     100    // 预缓冲 100ms 再开始播放（从40ms增大，减少开头卡顿）
+#define PREBUFFER_MS     200    // 🆕 预缓冲从100ms提高到200ms，吸收TTS分块间隙（200-500ms）
 
 // 环形缓冲区结构体
 typedef struct {
@@ -241,7 +241,7 @@ void setup_i2s_speaker() {
   cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count = 8;
   cfg.dma_buf_len = 512;
-  cfg.use_apll = false;
+  cfg.use_apll = true;              // 🆕 开启APLL精确时钟，减少I2S时钟抖动导致的底噪
   cfg.tx_desc_auto_clear = true;
 
   i2s_driver_install(I2S_NUM_1, &cfg, 0, NULL);
@@ -510,7 +510,7 @@ void taskI2SPlay(void* param) {
     // 教学说明：先攒够一定量的数据再开始播放
     // 防止刚开始播放就缓冲区空了，产生爆音/卡顿
     if (needPrebuffer) {
-      size_t prebufBytes = SAMPLE_RATE * 2 * PREBUFFER_MS / 1000;  // 40ms = 1280 字节
+      size_t prebufBytes = SAMPLE_RATE * 2 * PREBUFFER_MS / 1000;  // 200ms = 6400 字节
       if (ringBufLevel() < prebufBytes) {
         vTaskDelay(pdMS_TO_TICKS(5));
         continue;
@@ -550,7 +550,7 @@ void taskI2SPlay(void* param) {
       size_t offset = 0;
       while (offset < totalBytes && i2sPlayRunning) {
         size_t written = 0;
-        i2s_write(I2S_NUM_1, (uint8_t*)outLR + offset, totalBytes - offset, &written, pdMS_TO_TICKS(20));  // 从50ms缩短到20ms，减少异常时阻塞
+        i2s_write(I2S_NUM_1, (uint8_t*)outLR + offset, totalBytes - offset, &written, pdMS_TO_TICKS(30));  // 🆕 从20ms提到30ms，给DMA更多时间消化数据
         if (written > 0) {
           offset += written;
         } else {
@@ -562,7 +562,20 @@ void taskI2SPlay(void* param) {
       if (spkHasData && (millis() - spkLastDataMs > 200)) {
         spkHasData = false;
       }
-      vTaskDelay(pdMS_TO_TICKS(2));  // 短暂等待新数据
+      // 🆕 缓冲欠载时写入静音帧到I2S，防止DMA饿死产生爆音/咔嗒声
+      // 教学说明：I2S DMA 需要持续供数据，如果什么都不写，DMA缓冲耗尽后
+      // 喇叭会产生随机噪声或咔嗒声。写入静音帧（全0）保证安静等待。
+      if (spkHasData) {
+        // 正在播放中但暂时缺数据 → 写 5ms 静音帧填充
+        memset(inBuf, 0, bytesPerChunk);
+        size_t nSamp = bytesPerChunk / 2;
+        mono16_to_stereo32((int16_t*)inBuf, nSamp, outLR);
+        size_t totalBytes = nSamp * 2 * sizeof(int32_t);
+        size_t written = 0;
+        i2s_write(I2S_NUM_1, (uint8_t*)outLR, totalBytes, &written, pdMS_TO_TICKS(20));
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(2));  // 未在播放状态，短暂等待新数据
+      }
     }
   }
 

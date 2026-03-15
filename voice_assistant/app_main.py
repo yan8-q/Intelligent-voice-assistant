@@ -67,8 +67,11 @@ BASE_URL = _env("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible
 WS_URL = _env("DASHSCOPE_WS_BASE_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/inference")
 ROUTER_MODEL = _env("ROUTER_MODEL", "qwen-turbo")
 TEXT_MODEL = _env("TEXT_MODEL", "qwen-turbo")
+ASR_MODEL = _env("ASR_MODEL", "fun-asr-realtime")           # 🆕 ASR 模型可配置
 TTS_MODEL = _env("TTS_MODEL", "cosyvoice-v3-plus")
 DEFAULT_VOICE = _env("DEFAULT_VOICE", "longanhuan")
+# 方言克隆专用模型（v3.5-plus 原生支持 10 种方言，克隆音色+instruction 效果远胜 v3）
+DIALECT_CLONE_MODEL = _env("DIALECT_CLONE_MODEL", "cosyvoice-v3.5-plus")
 
 # ---- 引入语音系统模块 ----
 from voice_adapter import WebSocketASREngine
@@ -95,6 +98,9 @@ asr_engine: Optional[WebSocketASREngine] = None
 tts_engine: Optional[CosyVoiceEngine] = None
 dispatcher: Optional[IntentDispatcher] = None
 workflows: Optional[Workflows] = None
+# 基础方言音色 ID（预注册，用于没有专用音色的方言 + 用户未克隆的场景）
+# 教学说明：服务启动时后台注册，注册完成前为 None → 方言降级为文字模拟
+_base_dialect_voice_id: Optional[str] = None
 
 
 def init_voice_system():
@@ -111,8 +117,11 @@ def init_voice_system():
     global chat_state, asr_engine, tts_engine, dispatcher, workflows
 
     chat_state = ChatState(default_voice=DEFAULT_VOICE, current_voice=DEFAULT_VOICE, max_turns=8)
-    asr_engine = WebSocketASREngine(api_key=API_KEY, sample_rate=SAMPLE_RATE, ws_url=WS_URL)
-    tts_engine = CosyVoiceEngine(api_key=API_KEY, tts_model=TTS_MODEL, default_voice=DEFAULT_VOICE, sample_rate=SAMPLE_RATE)
+    asr_engine = WebSocketASREngine(api_key=API_KEY, sample_rate=SAMPLE_RATE, ws_url=WS_URL,
+                                        model=ASR_MODEL)  # ASR 模型从 .env 读取
+    tts_engine = CosyVoiceEngine(api_key=API_KEY, tts_model=TTS_MODEL, default_voice=DEFAULT_VOICE,
+                                     sample_rate=SAMPLE_RATE,
+                                     dialect_clone_model=DIALECT_CLONE_MODEL)  # 🆕 方言克隆用 v3.5
     dispatcher = IntentDispatcher(api_key=API_KEY, base_url=BASE_URL, router_model=ROUTER_MODEL, text_model=TEXT_MODEL)
     workflows = Workflows(api_key=API_KEY, base_url=BASE_URL, cosy=tts_engine, dispatcher=dispatcher)
 
@@ -169,6 +178,54 @@ def _safe_stop_recognition(r):
         pass
 
 
+# ===== 基础方言音色后台初始化 =====
+
+async def _init_base_dialect_voice():
+    """
+    后台任务：注册基础方言音色。
+
+    教学说明（为什么用后台任务而不是同步初始化）：
+    注册克隆音色需要 1-2 分钟（上传 OSS + 服务端训练 + 轮询等待），
+    如果放在 lifespan 里同步等待，服务要 2 分钟才能启动！
+    后台任务让服务秒启动，注册完成前方言降级为文字模拟（用户几乎感知不到）。
+    如果缓存文件已存在（之前注册过），则秒完成。
+    """
+    global _base_dialect_voice_id
+    try:
+        loop = asyncio.get_running_loop()
+        # ensure_base_dialect_voice 是阻塞操作（TTS生成+OSS上传+轮询），放线程池执行
+        voice_id = await loop.run_in_executor(
+            None, tts_engine.ensure_base_dialect_voice
+        )
+        if voice_id:
+            # 验证 voice_id 是否仍然有效（阿里云可能回收长期不用的音色）
+            is_valid = await loop.run_in_executor(
+                None, tts_engine.validate_voice_id, voice_id
+            )
+            if not is_valid:
+                # voice_id 已失效 → 删除缓存文件 → 重新注册
+                print(f"[DIALECT] 基础方言音色已失效，重新注册...", flush=True)
+                try:
+                    Path("runtime/base_dialect_voice.json").unlink(missing_ok=True)
+                except Exception:
+                    pass
+                voice_id = await loop.run_in_executor(
+                    None, tts_engine.ensure_base_dialect_voice
+                )
+            if voice_id:
+                _base_dialect_voice_id = voice_id
+                # 通知 ChatState（影响 dispatcher 的 LLM prompt 逻辑）
+                if chat_state:
+                    chat_state.has_base_dialect_voice = True
+                print(f"[DIALECT] 基础方言音色已就绪: {voice_id}", flush=True)
+            else:
+                print("[DIALECT] 基础方言音色注册失败，方言将降级为文字模拟", flush=True)
+        else:
+            print("[DIALECT] 基础方言音色注册失败，方言将降级为文字模拟", flush=True)
+    except Exception as e:
+        print(f"[DIALECT] 基础方言音色初始化异常: {e}", flush=True)
+
+
 # ===== FastAPI 应用 =====
 # 教学说明（lifespan 上下文管理器）：
 # FastAPI 废弃了 @app.on_event("startup")，改用 lifespan
@@ -177,8 +234,14 @@ def _safe_stop_recognition(r):
 async def lifespan(app: FastAPI):
     """服务生命周期：启动时初始化，关闭时清理"""
     init_voice_system()
+    # 后台注册基础方言音色（不阻塞服务启动，注册需要 1-2 分钟）
+    # 教学说明：asyncio.create_task 创建后台任务，不 await = 不等待完成
+    # 服务照常启动和响应，注册完成后自动更新 _base_dialect_voice_id
+    asyncio.create_task(_init_base_dialect_voice())
     print("=" * 60)
     print("  智能语音助手已启动")
+    print(f"  ASR 模型: {ASR_MODEL} (去赘词已开启)")
+    print(f"  TTS 模型: {TTS_MODEL} (默认) / {DIALECT_CLONE_MODEL} (方言克隆)")
     print(f"  Web 面板: http://localhost:8081")
     print(f"  ESP32 音频: ws://你的电脑IP:8081/ws_audio")
     print(f"  音频流:     http://你的电脑IP:8081/stream.wav")
@@ -265,6 +328,47 @@ async def full_system_reset(reason: str = ""):
         pass
 
     print("[SYSTEM] 全系统重置完成", flush=True)
+
+
+# ===== 方言 TTS 参数解析 =====
+
+def _resolve_dialect_tts(emotion: str) -> tuple:
+    """
+    解析当前方言模式下应使用的 TTS 参数。
+
+    教学说明（方言 TTS 的五条路径，优先级从高到低）：
+    1. 用户已克隆 + 有方言 → 用克隆音色 + 方言 instruction（最佳效果）
+    2. 有方言专用音色（4种）→ 用专用音色 + v3-flash（原生方言发音）
+    3. 无专用音色 + 未克隆 + 有基础方言音色 → 用基础音色 + 方言 instruction（新增！）
+    4. 无专用音色 + 未克隆 + 无基础音色 → 用默认音色 + LLM 文字模拟（降级）
+    5. 非方言模式 → 正常音色 + 情感 instruction
+
+    路径 3 是本次新增的核心逻辑：
+    预注册的基础方言音色本质上是一个克隆音色，所以支持方言 instruction。
+    这样 12 种没有专用音色的方言也能说出真实方言口音。
+
+    Returns:
+        (voice, model, instruction) 三元组
+    """
+    # 先用原有逻辑获取默认值
+    voice, tts_model = chat_state.get_tts_voice_and_model(tts_engine.tts_model)
+    instruction = chat_state.build_tts_instruction(emotion)
+
+    # 路径 3：无专用音色的方言 + 未克隆 + 有基础音色 → 覆盖为基础克隆音色
+    # 教学说明（v3.5 升级核心逻辑）：
+    #   旧方案：基础方言音色注册在 v3-plus → 只支持方言 instruction（不能加情感）
+    #   新方案：基础方言音色注册在 v3.5-plus → 同时支持方言+情感 instruction
+    #   v3.5-plus 原生支持 10 种方言，克隆音色的方言质量远胜 v3
+    if (chat_state.dialect
+            and chat_state.dialect not in DIALECT_VOICES
+            and not chat_state.is_cloned_voice
+            and _base_dialect_voice_id):
+        voice = _base_dialect_voice_id
+        tts_model = DIALECT_CLONE_MODEL   # 🆕 用 v3.5-plus（方言质量更好）
+        # v3.5 的克隆音色支持 方言+情感 同时控制（v3 做不到！）
+        instruction = f"请用{chat_state.dialect}表达。你说话的情感是{emotion}。"
+
+    return (voice, tts_model, instruction)
 
 
 # ===== 非流式 TTS 播放 =====
@@ -429,15 +533,17 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
     # RobotDuck cosyvoice.py 用 MIN=28/MAX=90/WAIT=0.9（通用保守值）
     # RobotDuck app_main.py 用 MIN=12/MAX=60/WAIT=0.5（实际优化值）
     # 我们之前误用了 cosyvoice.py 的保守值，导致后续分块太大、延迟高
-    FIRST_MIN_CHARS = 6  # 首句：攒 6 个字就发（快速开口，首响延迟最重要）
-    LATER_MIN_CHARS = 20 # 后续：攒 20 个字再发（减少 streaming_call 次数，降低分块间隙）
-    MAX_CHARS = 80       # 最多 80 字必须发（配合后续块加大）
-    MAX_WAIT = 0.8       # 最长等 0.8 秒（让块更饱满，减少碎片化）
-    # 教学说明（分块策略优化思路）：
+    FIRST_MIN_CHARS = 8  # 首句：攒 8 个字就发（比6字稍大，减少首块碎片）
+    LATER_MIN_CHARS = 15 # 后续：攒 15 个字再发（比20字更频繁喂TTS，分块更均匀）
+    MAX_CHARS = 80       # 最多 80 字必须发
+    MAX_WAIT = 0.5       # 最长等 0.5 秒（从0.8s降低，无标点长句更快触发）
+    # 教学说明（分块策略优化 v2）：
     # 每次 streaming_call() 有 200-500ms 处理开销（TTS 服务端初始化+合成）
-    # 块越多 → 间隙越多 → ESP32 缓冲区越容易被播空 → 卡顿
-    # 所以后续块加大（12→20），减少调用次数，总间隙大幅缩短
-    # 首句保持小块（6字）不变，确保快速开口
+    # 关键平衡点：块太碎→间隙多→卡顿，块太大→等待久→首句慢
+    # v1 用 6/20/0.8 → 首句快但后续间隙大（20字才发一次，间隙200-500ms）
+    # v2 用 8/15/0.5 → 首句略慢但后续更均匀（15字发一次，更频繁但更平滑）
+    # 总间隙 = 块数 × 单次间隙。块大小从20降到15 → 块数增加33% 但每块更短
+    # 配合 MAX_WAIT=0.5s，无标点长句也能更快送出
     PUNCT = set("。！？!?；;\n，,：:")  # 添加逗号冒号（中文最常见的断句点！）
 
     buf = ""
@@ -472,7 +578,7 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
                 except (TimeoutError, Exception) as _e:
                     if _attempt < _max_retries - 1:
                         print(f"[TTS] streaming_call 第{_attempt+1}次失败: {_e}，重建连接重试...", flush=True)
-                        await asyncio.sleep(0.3)  # 缩短等待（ASR 已在准备阶段关完）
+                        await asyncio.sleep(0.1)  # 🆕 从0.3s降到0.1s，减少重试间隙
                         # 重建 SpeechSynthesizer（新的 WebSocket 连接）
                         tts = await _loop.run_in_executor(None, _create_tts)
                     else:
@@ -540,7 +646,11 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
                 await flush_text()
                 continue
 
-            if len(buf) >= min_chars and any(ch in PUNCT for ch in delta):
+            # 教学说明（标点检测优化）：
+            # 旧逻辑：检查 delta（本轮新增文本）中有没有标点
+            # 问题：delta="。后续内容" 时，标点在中间不在末尾，可能导致"后续内容"粘在buf里
+            # 新逻辑：检查 buf 末尾字符是否是标点 → 更准确的断句
+            if len(buf) >= min_chars and buf[-1] in PUNCT:
                 await flush_text()
                 continue
 
@@ -609,7 +719,71 @@ async def start_ai_with_text(user_text: str):
         _t_start = time.time()
 
         try:
-            # 0. 关键词预检：普通聊天直接跳过 LLM 路由，省 1-2 秒
+            # ============================================================
+            # 0a. 否定意图预检（必须在肯定意图之前！）
+            # ============================================================
+            # 教学说明（为什么要先检查否定意图）：
+            #   现有关键词预检中 clone 排在 reset 前面，遍历用 break 跳出。
+            #   "取消克隆"包含"克隆"→ 先命中 clone → 反而开始克隆！
+            #   "取消方言"中"方言"不在任何列表→ 全部跳过→ 走普通聊天！
+            #   解决：在所有肯定意图之前，用"功能词+否定词"组合检测取消意图。
+            #   同时加状态感知：只在对应模式激活时才检查，避免误触发。
+            _text = user_text.strip()
+            _NEG = ["不", "别", "取消", "去掉", "停", "关", "换回", "切回", "转回"]
+
+            # --- 取消克隆（仅在克隆模式下检查）---
+            _want_cancel_clone = False
+            if chat_state.is_cloned_voice:
+                # 模式1："克隆"或"模仿" + 否定词（覆盖"不想克隆了"、"别模仿了"等）
+                if any(w in _text for w in ["克隆", "模仿"]) and \
+                   any(neg in _text for neg in _NEG):
+                    _want_cancel_clone = True
+                # 模式2：明确要用回原来的声音
+                if any(kw in _text for kw in ["原来的声音", "你的声音", "默认音色", "默认声音"]):
+                    _want_cancel_clone = True
+
+            if _want_cancel_clone:
+                chat_state.cancel_clone()
+                reply = "好的，已恢复默认声音。"
+                print(f"[AI] 否定预检命中: cancel_clone (text={_text})", flush=True)
+                instruction = chat_state.build_tts_instruction("neutral")
+                await _speak_text_to_broadcast(reply, chat_state.current_voice, instruction)
+                txt_buf.append(reply)
+                return
+
+            # --- 取消方言（仅在方言模式下检查）---
+            _want_cancel_dialect = False
+            if chat_state.dialect:
+                # 模式1：提到"普通话"（在方言模式下几乎一定是想切回来）
+                if "普通话" in _text:
+                    _want_cancel_dialect = True
+                # 模式2："方言" + 否定词（覆盖"不想要方言了"、"取消方言"、"别说方言"等）
+                if "方言" in _text and any(neg in _text for neg in _NEG):
+                    _want_cancel_dialect = True
+
+            if _want_cancel_dialect:
+                chat_state.cancel_dialect()
+                reply = "好的，已切回普通话。"
+                print(f"[AI] 否定预检命中: cancel_dialect (text={_text})", flush=True)
+                instruction = chat_state.build_tts_instruction("neutral")
+                await _speak_text_to_broadcast(reply, chat_state.current_voice, instruction)
+                txt_buf.append(reply)
+                return
+
+            # --- 全量重置 ---
+            _full_reset_kw = ["恢复默认", "默认模式", "恢复出厂", "全部重置"]
+            if any(kw in _text for kw in _full_reset_kw):
+                chat_state.reset_to_default()
+                reply = "好的，已恢复默认模式和默认音色。"
+                print(f"[AI] 否定预检命中: full_reset (text={_text})", flush=True)
+                instruction = chat_state.build_tts_instruction("neutral")
+                await _speak_text_to_broadcast(reply, chat_state.current_voice, instruction)
+                txt_buf.append(reply)
+                return
+
+            # ============================================================
+            # 0b. 肯定意图预检：普通聊天直接跳过 LLM 路由，省 1-2 秒
+            # ============================================================
             # 教学说明：只有特殊意图（克隆/方言/重置/角色）才需要调 LLM 路由
             # 普通对话占 90% 以上，直接走 default 快得多
             from voice_core.dispatcher import RouteDecision
@@ -620,9 +794,9 @@ async def start_ai_with_text(user_text: str):
                            "上海话", "沪语", "闽南话", "台语", "河南话", "山东话",
                            "天津话", "云南话", "贵州话", "湖北话", "江西话",
                            "陕西话", "山西话", "甘肃话", "宁夏话", "用方言"],
-                "reset": ["恢复默认", "默认模式", "默认音色", "别模仿了", "换回来",
-                          "不要克隆", "用原来的声音", "用回你的声音", "不用我的声音",
-                          "取消克隆", "换回原来"],
+                # 教学说明：取消克隆/方言的关键词已移到上方"否定意图预检"，
+                # 这里只保留"全量重置"相关的关键词，避免被 clone 先截胡
+                "reset": ["恢复默认", "默认模式", "默认音色", "换回来", "换回原来"],
                 "role_scene": ["脱口秀", "rap", "押韵", "唱", "客服", "解说",
                               "电台", "诗歌", "科普", "推广", "你是"],
             }
@@ -659,19 +833,26 @@ async def start_ai_with_text(user_text: str):
                 # 更新方言设置
                 if decision.intent == "dialect":
                     if decision.dialect:
-                        chat_state.dialect = decision.dialect
+                        # 归一化方言名：确保别名（粤语/台语等）映射到规范名（广东话/闽南话）
+                        from voice_core.state import normalize_dialect
+                        chat_state.dialect = normalize_dialect(decision.dialect)
                     if not (decision.query or "").strip():
-                        # 根据是否有方言专用音色，给不同的确认语
+                        # 用统一的方言 TTS 解析函数获取音色参数
+                        voice, tts_model, instruction = _resolve_dialect_tts(emotion)
+
+                        # 根据实际走的路径，给不同的确认语
+                        # 教学说明（三种有方言能力的情况）：
+                        # 1. 有方言专用音色（如广东话→longanyue_v3）
+                        # 2. 用户已克隆（克隆音色支持方言 instruction）
+                        # 3. 有基础方言音色（预注册的克隆音色）
                         _has_dialect_voice = (chat_state.dialect in DIALECT_VOICES)
-                        if _has_dialect_voice or chat_state.is_cloned_voice:
+                        _has_any_voice = _has_dialect_voice or chat_state.is_cloned_voice or _base_dialect_voice_id
+                        if _has_any_voice:
                             ack = f"好的，接下来我会用{chat_state.dialect or '方言'}和你聊。"
                         else:
-                            # 没有专用方言音色也没克隆，只能文字模拟
+                            # 完全没有方言 TTS 能力（基础音色还在注册中），降级提示
                             ack = (f"好的，接下来我会用{chat_state.dialect or '方言'}的口吻和你聊。"
                                    "克隆你的声音后可以获得更真实的方言发音。")
-                        # 获取方言对应的音色和模型
-                        voice, tts_model = chat_state.get_tts_voice_and_model(tts_engine.tts_model)
-                        instruction = chat_state.build_tts_instruction(emotion)
                         await _speak_text_to_broadcast(ack, voice, instruction, model=tts_model)
                         txt_buf.append(ack)
                         return
@@ -693,9 +874,10 @@ async def start_ai_with_text(user_text: str):
 
                 # 流式生成文本并 TTS
                 query = (decision.query or "").strip() or user_text
-                # 获取当前应使用的音色和模型（方言模式会切换到方言音色+v3-flash）
-                voice, tts_model = chat_state.get_tts_voice_and_model(tts_engine.tts_model)
-                instruction = chat_state.build_tts_instruction(emotion)
+                # 获取当前应使用的音色和模型
+                # 教学说明：_resolve_dialect_tts 统一处理方言音色选择，
+                # 包括专用音色、克隆音色和基础方言音色三种路径
+                voice, tts_model, instruction = _resolve_dialect_tts(emotion)
                 _t_llm = time.time()
                 text_stream = dispatcher.chat_answer_stream(query, chat_state, emotion)
                 print(f"[TIMING] LLM 流创建耗时 {time.time()-_t_llm:.3f}s (总 {time.time()-_t_start:.3f}s)", flush=True)

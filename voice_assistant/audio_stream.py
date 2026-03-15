@@ -78,7 +78,7 @@ class StreamClient:
 
 
 stream_clients: "Set[StreamClient]" = set()
-STREAM_QUEUE_MAX = 32  # 队列最大长度（约 320ms 缓冲）
+STREAM_QUEUE_MAX = 64  # 🆕 队列从32提高到64（约 640ms 缓冲，吸收WiFi抖动）
 
 
 def _wav_header_unknown_size(sr=16000, ch=1, sw=2) -> bytes:

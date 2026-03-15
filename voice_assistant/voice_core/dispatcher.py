@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, List, Iterator
 
 from openai import OpenAI
 
-from voice_core.state import ChatState, Emotion
+from voice_core.state import ChatState, Emotion, normalize_dialect
 
 # ==================== 常量定义 ====================
 
@@ -198,10 +198,12 @@ class IntentDispatcher:
             return RouteDecision(intent="clone", emotion=emotion, query=q, style_hint=str(seconds))
 
         if fn_name == "workflow_dialect":
+            # 归一化方言名：LLM 可能返回别名（如"粤语"），需映射为规范名（"广东话"）
+            raw_dialect = str(args.get("dialect", "")).strip()
             return RouteDecision(
                 intent="dialect", emotion=emotion,
                 query=str(args.get("query", "")).strip(),
-                dialect=str(args.get("dialect", "")).strip(),
+                dialect=normalize_dialect(raw_dialect),
             )
 
         if fn_name == "workflow_role_scene":
@@ -253,8 +255,15 @@ class IntentDispatcher:
         # - 有方言专用音色（如 longanyue_v3 粤语）：音色自带方言发音，LLM 用标准普通话
         # - 没有专用音色且未克隆：靠 LLM 文字模拟方言口吻（如"俺"代替"我"）
         # - 已克隆：方言通过 TTS instruction 实现，LLM 用标准普通话
+        # 教学说明（方言文字模拟的触发条件）：
+        # 只在"完全没有方言 TTS 能力"时才让 LLM 用文字模拟方言。
+        # 如果有专用音色、克隆音色或基础方言音色，TTS 已经能说方言了，
+        # LLM 再加方言文字 → "双重方言"效果怪异。
         from voice_core.state import DIALECT_VOICES
-        if state.dialect and not state.is_cloned_voice and state.dialect not in DIALECT_VOICES:
+        if (state.dialect
+                and not state.is_cloned_voice
+                and state.dialect not in DIALECT_VOICES
+                and not state.has_base_dialect_voice):
             system += f"\n接下来请用{state.dialect}的口吻表达，可夹带少量典型方言词汇。\n"
 
         if state.role:

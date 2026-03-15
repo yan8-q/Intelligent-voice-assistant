@@ -46,7 +46,8 @@ class Workflows:
         # === 设置方言 ===
         if decision.intent == "dialect":
             if decision.dialect:
-                state.dialect = decision.dialect
+                from voice_core.state import normalize_dialect
+                state.dialect = normalize_dialect(decision.dialect)
             if not decision.query:
                 return f"好的，接下来我会用{state.dialect}和你聊。"
             # 有具体问题，直接回答
