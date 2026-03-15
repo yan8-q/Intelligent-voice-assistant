@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 语音助手 — 接线实物教程</title>
+<style>
+/* ====== 全局样式 ====== */
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #0d1117; color: #e6edf3;
+  font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  min-height: 100vh;
+}
+
+/* ====== 顶部标题栏 ====== */
+.header {
+  background: linear-gradient(135deg, #1a1b4b 0%, #2d1b69 100%);
+  padding: 16px 24px;
+  display: flex; align-items: center; gap: 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.5);
+}
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .subtitle { color: #8b949e; font-size: 13px; margin-top: 2px; }
+.header .wire-count {
+  margin-left: auto; background: #238636; color: #fff;
+  padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+}
+
+/* ====== 主布局 ====== */
+.main {
+  display: flex; gap: 0; max-width: 1500px;
+  margin: 0 auto; height: calc(100vh - 64px);
+}
+
+/* ====== 左侧图表区 ====== */
+.diagram-area {
+  flex: 1; padding: 16px; overflow: auto;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* 图例 */
+.legend {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  background: #161b22; border-radius: 8px;
+  padding: 10px 16px; border: 1px solid #30363d; font-size: 12px;
+}
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-line { width: 28px; height: 4px; border-radius: 2px; }
+
+/* Canvas 容器 */
+.canvas-wrap {
+  flex: 1; display: flex; justify-content: center;
+  align-items: flex-start; min-height: 0;
+}
+canvas {
+  border-radius: 12px; background: #1c2128;
+  box-shadow: 0 4px 24px rgba(0,0,0,.5);
+  cursor: crosshair; max-width: 100%;
+}
+
+/* ====== 右侧步骤面板 ====== */
+.sidebar {
+  width: 420px; min-width: 380px;
+  background: #161b22; border-left: 1px solid #30363d;
+  overflow-y: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* 组件识别卡片 */
+.comp-cards {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+}
+.comp-card {
+  background: #21262d; border: 1px solid #30363d;
+  border-radius: 8px; padding: 10px; text-align: center;
+  cursor: pointer; transition: all .2s;
+}
+.comp-card:hover { border-color: #58a6ff; }
+.comp-card .icon { font-size: 28px; margin-bottom: 4px; }
+.comp-card .name { font-size: 11px; font-weight: 600; color: #8b949e; }
+
+/* 步骤卡片 */
+.step-card {
+  background: #21262d; border: 2px solid #30363d;
+  border-radius: 10px; overflow: hidden;
+  cursor: pointer; transition: all .25s;
+}
+.step-card:hover { border-color: #484f58; }
+.step-card.active { border-color: #58a6ff; box-shadow: 0 0 0 1px #58a6ff33; }
+.step-card.done { border-color: #238636; }
+
+.step-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+}
+.step-num {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: #30363d; display: flex; align-items: center;
+  justify-content: center; font-weight: 700; font-size: 15px;
+  flex-shrink: 0; transition: all .2s;
+}
+.step-card.active .step-num { background: #1f6feb; }
+.step-card.done .step-num { background: #238636; }
+.step-title { font-size: 14px; font-weight: 500; flex: 1; }
+.step-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: #30363d; color: #8b949e;
+}
+.step-card.active .step-badge { background: #1f6feb33; color: #58a6ff; }
+
+.step-body {
+  padding: 0 14px 14px 14px; display: none;
+  font-size: 13px; line-height: 1.8; color: #c9d1d9;
+}
+.step-card.active .step-body { display: block; }
+
+/* 步骤内的接线表格 */
+.wire-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.wire-table th, .wire-table td {
+  padding: 6px 8px; border: 1px solid #30363d;
+  font-size: 12px; text-align: left;
+}
+.wire-table th { background: #1f6feb22; color: #58a6ff; font-weight: 600; }
+.wire-table td { background: #161b22; }
+
+/* 接线复选框 */
+.wire-check {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; margin: 4px 0; border-radius: 6px;
+  background: #161b22; border: 1px solid #30363d;
+  cursor: pointer; transition: all .2s; font-size: 12px;
+}
+.wire-check:hover { border-color: #484f58; }
+.wire-check.checked { background: #23863622; border-color: #238636; }
+.wire-check input { accent-color: #238636; cursor: pointer; }
+.wire-check .wdot {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid #fff3; flex-shrink: 0;
+}
+
+/* 提示框 */
+.tip {
+  background: #0d1117; padding: 10px 12px; border-radius: 6px;
+  margin: 8px 0; border-left: 3px solid #f0883e;
+  font-size: 12px; line-height: 1.7;
+}
+.tip.green { border-left-color: #238636; }
+.tip.blue { border-left-color: #58a6ff; }
+
+/* 进度条 */
+.progress-bar {
+  height: 4px; background: #30363d; border-radius: 2px;
+  margin-bottom: 8px; overflow: hidden;
+}
+.progress-fill {
+  height: 100%; background: linear-gradient(90deg, #238636, #2ea043);
+  transition: width .4s ease; border-radius: 2px;
+}
+
+/* Tooltip */
+#tooltip {
+  position: fixed; background: #0d1117ee; color: #e6edf3;
+  padding: 8px 12px; border-radius: 8px; font-size: 12px;
+  pointer-events: none; display: none; z-index: 100;
+  max-width: 300px; border: 1px solid #30363d;
+  box-shadow: 0 4px 12px rgba(0,0,0,.5);
+}
+
+/* 打印 */
+@media print {
+  .sidebar { display: none; }
+  .main { display: block; }
+  body { background: #fff; color: #000; }
+}
+
+/* 小屏幕 */
+@media (max-width: 900px) {
+  .main { flex-direction: column; height: auto; }
+  .sidebar { width: 100%; min-width: 0; border-left: none; border-top: 1px solid #30363d; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>ESP32 语音助手 — 接线实物教程</h1>
+    <div class="subtitle">400孔面包板 + ESP32悬空方案 | 共13根杜邦线</div>
+  </div>
+  <div class="wire-count" id="progressText">已完成 0 / 13 根线</div>
+</div>
+
+<div class="main">
+  <!-- 左侧：交互式接线图 -->
+  <div class="diagram-area">
+    <div class="legend">
+      <div class="legend-item"><div class="legend-line" style="background:#f85149"></div> 5V 电源 (红)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#6e7681"></div> GND 地线 (黑/灰)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#f0883e"></div> 3.3V (橙)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#3fb950"></div> 功放信号 (绿)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#58a6ff"></div> 麦克风信号 (蓝)</div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="cv" width="1600" height="1700"></canvas>
+    </div>
+  </div>
+
+  <!-- 右侧：步骤面板 -->
+  <div class="sidebar">
+    <!-- 进度条 -->
+    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+
+    <!-- 组件识别 -->
+    <div style="font-size:12px; color:#8b949e; font-weight:600; margin-bottom:4px;">你的三个组件：</div>
+    <div class="comp-cards">
+      <div class="comp-card" onclick="showCompInfo('esp32')">
+        <div class="icon" style="color:#3fb950;">&#9881;</div>
+        <div class="name">ESP32 主控板</div>
+      </div>
+      <div class="comp-card" onclick="showCompInfo('max')">
+        <div class="icon" style="color:#a371f7;">&#9835;</div>
+        <div class="name">MAX98357A 功放</div>
+      </div>
+      <div class="comp-card" onclick="showCompInfo('mic')">
+        <div class="icon" style="color:#58a6ff;">&#9834;</div>
+        <div class="name">INMP441 麦克风</div>
+      </div>
+    </div>
+
+    <!-- 组件信息弹窗区域 -->
+    <div id="compInfo" style="display:none;"></div>
+
+    <!-- 步骤卡片列表 -->
+    <div id="stepsContainer"></div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ==========================================
+// 全局配置
+// ==========================================
+
+// HiDPI 缩放因子（Canvas 实际像素 = 显示像素 × SCALE）
+const SCALE = 2;
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+// Canvas 逻辑尺寸（CSS显示尺寸）
+const W = cv.width / SCALE;   // 800
+const H = cv.height / SCALE;  // 850
+
+// 设置 Canvas 的 CSS 显示尺寸
+cv.style.width = W + 'px';
+cv.style.height = H + 'px';
+
+// 当前激活步骤
+let activeStep = 0;
+
+// 已勾选的线（wireIndex → boolean）
+const checkedWires = {};
+
+// ==========================================
+// 面包板参数（400孔迷你面包板）
+// ==========================================
+const BB_X = 50, BB_Y = 110;         // 面包板左上角
+const BB_W = 700, BB_H = 620;        // 面包板总尺寸
+const ROWS = 30;                      // 行数（1~30）
+const ROW_H = 17;                     // 行距
+const HOLE_R = 3.5;                   // 孔半径
+
+// 列像素偏移（a~e 紧密排列，中间沟槽间隔，f~j 紧密排列）
+const COL_PX = [0, 17, 34, 51, 68, 108, 125, 142, 159, 176];
+const COL_NAMES = ['a','b','c','d','e','f','g','h','i','j'];
+
+// 面包板内孔位绝对坐标
+function holeXY(row, ci) {
+  return [BB_X + 60 + COL_PX[ci], BB_Y + 56 + (row - 1) * ROW_H];
+}
+
+// 电源轨 Y 坐标
+const RAIL_PLUS_Y  = BB_Y + 18;  // +5V 轨
+const RAIL_MINUS_Y = BB_Y + 36;  // GND 轨
+
+// 电源轨上某个 X 位置
+function railXY(type, xFrac) {
+  const x = BB_X + 60 + xFrac * 176;
+  const y = type === '+' ? RAIL_PLUS_Y : RAIL_MINUS_Y;
+  return [x, y];
+}
+
+// ==========================================
+// ESP32（悬空在面包板上方）
+// ==========================================
+const ESP_X = 70, ESP_Y = 8;
+const ESP_W = 560, ESP_H = 48;
+
+// 上排引脚名（从左到右，对应照片中的标注）
+const espUpper = [
+  'VIN','GND','D13','D12','D14','D27','D26','D25','D33','D32','D35','D34','VN','VP','EN'
+];
+// 下排引脚名
+const espLower = [
+  '3V3','GND2','D15','D2','D4','D16','D17','D5','D18','D19','D21','RX0','TX0','D22','D23'
+];
+// 本项目中需要接线的引脚集合
+const espUsed = new Set(['VIN','GND','D14','D27','D26','D25','D32','3V3','D15']);
+
+// ESP32 引脚坐标
+function espPinXY(name) {
+  let idx = espUpper.indexOf(name);
+  if (idx >= 0) return [ESP_X + 24 + idx * 36, ESP_Y + 12];
+  idx = espLower.indexOf(name);
+  if (idx >= 0) return [ESP_X + 24 + idx * 36, ESP_Y + ESP_H - 8];
+  return [0, 0];
+}
+
+// ==========================================
+// MAX98357A 功放模块（紫色板，单排引脚，插 a列 行2~8）
+// ==========================================
+const MAX_PINS = [
+  { name: 'Vin',  row: 2, ci: 0, used: true,  desc: '5V电源输入' },
+  { name: 'GND',  row: 3, ci: 0, used: true,  desc: '接地' },
+  { name: 'SD',   row: 4, ci: 0, used: false, desc: '关断引脚(不接)' },
+  { name: 'GAIN', row: 5, ci: 0, used: false, desc: '增益(不接=9dB)' },
+  { name: 'DIN',  row: 6, ci: 0, used: true,  desc: 'I2S数据输入' },
+  { name: 'BCLK', row: 7, ci: 0, used: true,  desc: 'I2S位时钟' },
+  { name: 'LRC',  row: 8, ci: 0, used: true,  desc: 'I2S左右声道' },
+];
+
+// ==========================================
+// INMP441 麦克风（圆板，双排引脚，跨沟槽插行15~17）
+// ==========================================
+// 左排（e列，即 ci=4）——面包板左半 a~e 连通
+const MIC_LEFT = [
+  { name: 'L/R', row: 15, ci: 4, desc: '声道选择(接GND=左)' },
+  { name: 'WS',  row: 16, ci: 4, desc: '字选择(Word Select)' },
+  { name: 'SCK', row: 17, ci: 4, desc: '串行时钟' },
+];
+// 右排（f列，即 ci=5）——面包板右半 f~j 连通
+const MIC_RIGHT = [
+  { name: 'GND', row: 15, ci: 5, desc: '接地' },
+  { name: 'VDD', row: 16, ci: 5, desc: '3.3V电源' },
+  { name: 'SD',  row: 17, ci: 5, desc: '串行数据输出' },
+];
+
+// ==========================================
+// 连线定义（13根线，分4个步骤）
+// ==========================================
+const WIRES = [
+  // === 步骤0：ESP32 电源（2根母对公） ===
+  {
+    from: { t:'esp', n:'VIN' },
+    to:   { t:'rail', r:'+', xf:0.15 },
+    color: '#f85149', step: 0, wireNum: 1,
+    label: '线① ESP32 VIN → +轨(5V)',
+    wireType: '母对公·红色',
+  },
+  {
+    from: { t:'esp', n:'GND' },
+    to:   { t:'rail', r:'-', xf:0.15 },
+    color: '#6e7681', step: 0, wireNum: 2,
+    label: '线② ESP32 GND → −轨',
+    wireType: '母对公·黑色',
+  },
+
+  // === 步骤1：3.3V 供电（1根母对公） ===
+  {
+    from: { t:'esp', n:'3V3' },
+    to:   { t:'hole', row:16, ci:7 },
+    color: '#f0883e', step: 1, wireNum: 3,
+    label: '线③ ESP32 3V3 → 行16 h列',
+    wireType: '母对公·橙色',
+  },
+
+  // === 步骤2：MAX98357A 功放（5根线） ===
+  {
+    from: { t:'hole', row:8, ci:2 },
+    to:   { t:'esp', n:'D27' },
+    color: '#3fb950', step: 2, wireNum: 4,
+    label: '线④ 行8 c列(LRC) → ESP32 D27',
+    wireType: '母对公·绿色',
+  },
+  {
+    from: { t:'hole', row:7, ci:2 },
+    to:   { t:'esp', n:'D26' },
+    color: '#3fb950', step: 2, wireNum: 5,
+    label: '线⑤ 行7 c列(BCLK) → ESP32 D26',
+    wireType: '母对公·绿色',
+  },
+  {
+    from: { t:'hole', row:6, ci:2 },
+    to:   { t:'esp', n:'D25' },
+    color: '#3fb950', step: 2, wireNum: 6,
+    label: '线⑥ 行6 c列(DIN) → ESP32 D25',
+    wireType: '母对公·绿色',
+  },
+  {
+    from: { t:'hole', row:3, ci:2 },
+    to:   { t:'rail', r:'-', xf:0.4 },
+    color: '#6e7681', step: 2, wireNum: 7,
+    label: '线⑦ 行3 c列(GND) → −轨',
+    wireType: '公对公·黑色',
+  },
+  {
+    from: { t:'hole', row:2, ci:2 },
+    to:   { t:'rail', r:'+', xf:0.4 },
+    color: '#f85149', step: 2, wireNum: 8,
+    label: '线⑧ 行2 c列(Vin) → +轨(5V)',
+    wireType: '公对公·红色',
+  },
+
+  // === 步骤3：INMP441 麦克风（5根线） ===
+  {
+    from: { t:'hole', row:17, ci:3 },
+    to:   { t:'esp', n:'D14' },
+    color: '#58a6ff', step: 3, wireNum: 9,
+    label: '线⑨ 行17 d列(SCK) → ESP32 D14',
+    wireType: '母对公·蓝色',
+  },
+  {
+    from: { t:'hole', row:16, ci:3 },
+    to:   { t:'esp', n:'D15' },
+    color: '#58a6ff', step: 3, wireNum: 10,
+    label: '线⑩ 行16 d列(WS) → ESP32 D15',
+    wireType: '母对公·蓝色',
+  },
+  {
+    from: { t:'hole', row:17, ci:7 },
+    to:   { t:'esp', n:'D32' },
+    color: '#58a6ff', step: 3, wireNum: 11,
+    label: '线⑪ 行17 h列(SD数据) → ESP32 D32',
+    wireType: '母对公·蓝色',
+  },
+  {
+    from: { t:'hole', row:15, ci:7 },
+    to:   { t:'rail', r:'-', xf:0.7 },
+    color: '#6e7681', step: 3, wireNum: 12,
+    label: '线⑫ 行15 h列(GND) → −轨',
+    wireType: '公对公·黑色',
+  },
+  {
+    from: { t:'hole', row:15, ci:3 },
+    to:   { t:'rail', r:'-', xf:0.85 },
+    color: '#6e7681', step: 3, wireNum: 13,
+    label: '线⑬ 行15 d列(L/R) → −轨',
+    wireType: '公对公·黑色',
+  },
+];
+
+// ==========================================
+// 坐标转换辅助函数
+// ==========================================
+function wireXY(p) {
+  if (p.t === 'esp')  return espPinXY(p.n);
+  if (p.t === 'hole') return holeXY(p.row, p.ci);
+  if (p.t === 'rail') return railXY(p.r, p.xf);
+  return [0, 0];
+}
+
+// 圆角矩形辅助函数
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+
+// 中文圆圈数字（①~⑬）
+const circleNums = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑪','⑫','⑬'];
+
+// ==========================================
+// 主绘制函数
+// ==========================================
+function draw() {
+  // 应用 HiDPI 缩放
+  ctx.save();
+  ctx.scale(SCALE, SCALE);
+  ctx.clearRect(0, 0, W, H);
+
+  // 背景
+  ctx.fillStyle = '#1c2128';
+  ctx.fillRect(0, 0, W, H);
+
+  // ---------- 绘制 ESP32（悬空在顶部）----------
+  drawESP32();
+
+  // ---------- 绘制面包板 ----------
+  drawBreadboard();
+
+  // ---------- 绘制 MAX98357A ----------
+  drawMAX98357A();
+
+  // ---------- 绘制 INMP441 ----------
+  drawINMP441();
+
+  // ---------- 绘制连线 ----------
+  drawWires();
+
+  // ---------- 面包板连通提示 ----------
+  drawConnectivityHints();
+
+  // ---------- 底部信息 ----------
+  drawFooter();
+
+  ctx.restore();
+}
+
+// ==========================================
+// 绘制 ESP32 开发板
+// ==========================================
+function drawESP32() {
+  // 外壳（黑色PCB）
+  ctx.fillStyle = '#1a1a1a';
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, ESP_X - 14, ESP_Y - 6, ESP_W + 28, ESP_H + 12, 6);
+  ctx.fill(); ctx.stroke();
+
+  // WiFi 天线区域（右侧银色金属罩）
+  const antX = ESP_X + ESP_W - 160;
+  ctx.fillStyle = '#555';
+  roundRect(ctx, antX, ESP_Y + 2, 140, ESP_H - 4, 4);
+  ctx.fill();
+  ctx.fillStyle = '#777'; ctx.font = '8px Microsoft YaHei'; ctx.textAlign = 'center';
+  ctx.fillText('ESP32-WROOM-32', antX + 70, ESP_Y + ESP_H / 2 + 3);
+
+  // USB-C 口（左侧）
+  ctx.fillStyle = '#888';
+  roundRect(ctx, ESP_X - 30, ESP_Y + ESP_H / 2 - 7, 20, 14, 3);
+  ctx.fill();
+  ctx.fillStyle = '#bbb'; ctx.font = '7px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('USB', ESP_X - 20, ESP_Y + ESP_H / 2 + 3);
+
+  // 标题
+  ctx.fillStyle = '#f0883e';
+  ctx.font = 'bold 11px Microsoft YaHei';
+  ctx.textAlign = 'center';
+  ctx.fillText('ESP32 开发板（悬空，不插面包板，全部用母头杜邦线连接）', ESP_X + ESP_W / 2, ESP_Y - 14);
+
+  // 上排引脚
+  espUpper.forEach((name, i) => {
+    const [x, y] = espPinXY(name);
+    const used = espUsed.has(name);
+    // 引脚点
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = used ? '#f85149' : '#555';
+    ctx.fill();
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 0.8; ctx.stroke();
+    // 引脚标签
+    ctx.fillStyle = used ? '#ff7b72' : '#484f58';
+    ctx.font = used ? 'bold 8px Microsoft YaHei' : '7px Microsoft YaHei';
+    ctx.textAlign = 'center';
+    ctx.fillText(name, x, y - 8);
+  });
+
+  // 下排引脚
+  espLower.forEach((name, i) => {
+    const [x, y] = espPinXY(name);
+    const dn = name === 'GND2' ? 'GND' : name;
+    const used = espUsed.has(name);
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = used ? '#f85149' : '#555';
+    ctx.fill();
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 0.8; ctx.stroke();
+    ctx.fillStyle = used ? '#ff7b72' : '#484f58';
+    ctx.font = used ? 'bold 8px Microsoft YaHei' : '7px Microsoft YaHei';
+    ctx.textAlign = 'center';
+    ctx.fillText(dn, x, y + 14);
+  });
+}
+
+// ==========================================
+// 绘制面包板
+// ==========================================
+function drawBreadboard() {
+  // 面包板底色（浅奶白色）
+  ctx.fillStyle = '#f5f0e0';
+  ctx.strokeStyle = '#bbb';
+  ctx.lineWidth = 2;
+  roundRect(ctx, BB_X, BB_Y, BB_W, BB_H, 10);
+  ctx.fill(); ctx.stroke();
+
+  // 电源轨背景
+  ctx.fillStyle = '#ebe6d6';
+  ctx.fillRect(BB_X + 10, RAIL_PLUS_Y - 8, BB_W - 20, 32);
+
+  // +轨（红线）
+  ctx.strokeStyle = '#f85149';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(BB_X + 55, RAIL_PLUS_Y);
+  ctx.lineTo(BB_X + BB_W - 20, RAIL_PLUS_Y);
+  ctx.stroke();
+  // −轨（蓝线）
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(BB_X + 55, RAIL_MINUS_Y);
+  ctx.lineTo(BB_X + BB_W - 20, RAIL_MINUS_Y);
+  ctx.stroke();
+  // 轨标签
+  ctx.fillStyle = '#f85149'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('+  5V', BB_X + 12, RAIL_PLUS_Y + 4);
+  ctx.fillStyle = '#58a6ff';
+  ctx.fillText('−  GND', BB_X + 12, RAIL_MINUS_Y + 4);
+
+  // 电源轨孔位
+  for (let i = 0; i < 10; i++) {
+    const x = BB_X + 60 + i * 18;
+    // +轨孔
+    ctx.beginPath(); ctx.arc(x, RAIL_PLUS_Y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#c44'; ctx.fill();
+    // −轨孔
+    ctx.beginPath(); ctx.arc(x, RAIL_MINUS_Y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#4488cc'; ctx.fill();
+  }
+
+  // 列标签（a~j）
+  ctx.fillStyle = '#888'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  COL_NAMES.forEach((n, i) => {
+    ctx.fillText(n, holeXY(1, i)[0], BB_Y + 48);
+  });
+
+  // 中间沟槽
+  const trenchLeft = holeXY(1, 4)[0] + 10;
+  const trenchRight = holeXY(1, 5)[0] - 10;
+  const trenchMid = (trenchLeft + trenchRight) / 2;
+  ctx.fillStyle = '#d8d0b8';
+  ctx.fillRect(trenchLeft, BB_Y + 50, trenchRight - trenchLeft, ROWS * ROW_H + 12);
+  // 沟槽标记
+  ctx.fillStyle = '#a09060'; ctx.font = '8px Microsoft YaHei'; ctx.textAlign = 'center';
+  ctx.fillText('沟', trenchMid, BB_Y + 65);
+  ctx.fillText('槽', trenchMid, BB_Y + 80);
+
+  // 主区域孔洞
+  for (let r = 1; r <= ROWS; r++) {
+    // 行号
+    ctx.fillStyle = '#999'; ctx.font = '7px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(r, BB_X + 48, holeXY(r, 0)[1] + 3);
+    ctx.textAlign = 'left';
+    ctx.fillText(r, holeXY(r, 9)[0] + 14, holeXY(r, 0)[1] + 3);
+
+    // 每行10个孔
+    for (let c = 0; c < 10; c++) {
+      const [x, y] = holeXY(r, c);
+      ctx.beginPath(); ctx.arc(x, y, HOLE_R, 0, Math.PI * 2);
+      ctx.fillStyle = '#777'; ctx.fill();
+      // 孔心（深色）
+      ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#444'; ctx.fill();
+    }
+  }
+}
+
+// ==========================================
+// 绘制 MAX98357A 功放模块
+// ==========================================
+function drawMAX98357A() {
+  // 模块外壳（紫色PCB）
+  const mTop = holeXY(2, 0)[1] - 16;
+  const mBot = holeXY(8, 0)[1] + 16;
+  const mLeft = holeXY(2, 0)[0] - 72;
+  const mW = 76;
+  const mH = mBot - mTop;
+
+  ctx.fillStyle = '#7b1fa2';
+  ctx.strokeStyle = '#9c27b0';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, mLeft, mTop, mW, mH, 5);
+  ctx.fill(); ctx.stroke();
+
+  // 螺丝端子（喇叭输出）
+  ctx.fillStyle = '#2e7d32';
+  ctx.strokeStyle = '#4caf50';
+  ctx.lineWidth = 1;
+  roundRect(ctx, mLeft + 8, mTop - 24, mW - 16, 20, 3);
+  ctx.fill(); ctx.stroke();
+  // 螺丝孔
+  ctx.beginPath(); ctx.arc(mLeft + 22, mTop - 14, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#555'; ctx.fill();
+  ctx.beginPath(); ctx.arc(mLeft + mW - 22, mTop - 14, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#555'; ctx.fill();
+  // 端子标签
+  ctx.fillStyle = '#fff'; ctx.font = '8px Microsoft YaHei'; ctx.textAlign = 'center';
+  ctx.fillText('+ 喇叭 −', mLeft + mW / 2, mTop - 10);
+
+  // 芯片名称
+  ctx.fillStyle = '#e1bee7'; ctx.font = 'bold 9px Microsoft YaHei'; ctx.textAlign = 'center';
+  ctx.fillText('MAX98357A', mLeft + mW / 2, mTop + 20);
+  ctx.fillStyle = '#ce93d8'; ctx.font = '8px Microsoft YaHei';
+  ctx.fillText('I2S 功放', mLeft + mW / 2, mTop + 34);
+
+  // 引脚标签（在面包板孔旁边标注）
+  MAX_PINS.forEach(p => {
+    const [x, y] = holeXY(p.row, p.ci);
+    // 高亮已用引脚的孔
+    ctx.beginPath(); ctx.arc(x, y, HOLE_R + 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = p.used ? '#ff980088' : '#55555588';
+    ctx.fill();
+    // 标签
+    ctx.fillStyle = p.used ? '#ffcc02' : '#999';
+    ctx.font = p.used ? 'bold 8px Microsoft YaHei' : '8px Microsoft YaHei';
+    ctx.textAlign = 'right';
+    ctx.fillText(p.name, x - 12, y + 3);
+  });
+}
+
+// ==========================================
+// 绘制 INMP441 麦克风模块
+// ==========================================
+function drawINMP441() {
+  // 圆形PCB
+  const micCX = (holeXY(16, 4)[0] + holeXY(16, 5)[0]) / 2;
+  const micCY = holeXY(16, 4)[1];
+
+  // 外圆（黑色PCB + 金色边缘）
+  ctx.beginPath(); ctx.arc(micCX, micCY, 36, 0, Math.PI * 2);
+  ctx.fillStyle = '#1a1a1a'; ctx.fill();
+  ctx.strokeStyle = '#c0a030'; ctx.lineWidth = 2.5; ctx.stroke();
+
+  // 麦克风声孔（中心圆点）
+  ctx.beginPath(); ctx.arc(micCX, micCY - 2, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#333'; ctx.fill();
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1; ctx.stroke();
+
+  // 标签
+  ctx.fillStyle = '#ddd'; ctx.font = 'bold 9px Microsoft YaHei'; ctx.textAlign = 'center';
+  ctx.fillText('INMP441', micCX, micCY + 12);
+  ctx.fillStyle = '#aaa'; ctx.font = '8px Microsoft YaHei';
+  ctx.fillText('麦克风', micCX, micCY + 24);
+
+  // 左排引脚（e列）标签
+  MIC_LEFT.forEach(p => {
+    const [x, y] = holeXY(p.row, p.ci);
+    ctx.beginPath(); ctx.arc(x, y, HOLE_R + 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff980088'; ctx.fill();
+    ctx.fillStyle = '#ffcc02'; ctx.font = 'bold 7px Microsoft YaHei';
+    ctx.textAlign = 'right';
+    ctx.fillText(p.name, x - 10, y + 3);
+  });
+
+  // 右排引脚（f列）标签
+  MIC_RIGHT.forEach(p => {
+    const [x, y] = holeXY(p.row, p.ci);
+    ctx.beginPath(); ctx.arc(x, y, HOLE_R + 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff980088'; ctx.fill();
+    ctx.fillStyle = '#ffcc02'; ctx.font = 'bold 7px Microsoft YaHei';
+    ctx.textAlign = 'left';
+    ctx.fillText(p.name, x + 10, y + 3);
+  });
+}
+
+// ==========================================
+// 绘制连线
+// ==========================================
+function drawWires() {
+  const showAll = activeStep === 4; // 第5步：显示所有线
+
+  WIRES.forEach((w, idx) => {
+    const [x1, y1] = wireXY(w.from);
+    const [x2, y2] = wireXY(w.to);
+    const isActive = w.step === activeStep;
+    const isChecked = checkedWires[idx];
+
+    // 决定线的可见性和样式
+    let alpha, lineW;
+    if (showAll) {
+      alpha = 0.9;
+      lineW = isChecked ? 4 : 3;
+    } else if (isActive) {
+      alpha = isChecked ? 0.5 : 1;
+      lineW = isChecked ? 3 : 4;
+    } else {
+      alpha = 0.08;
+      lineW = 1.5;
+    }
+
+    // 画贝塞尔曲线（模拟杜邦线弯曲走线）
+    ctx.beginPath();
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const midY = Math.min(y1, y2) - Math.abs(dx) * 0.15 - 10;
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo((x1 + x2) / 2, midY, x2, y2);
+
+    // 线色
+    let lineColor = w.color;
+    if (isChecked && (isActive || showAll)) {
+      lineColor = '#238636'; // 已完成变绿
+    }
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = lineW;
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // 线两端的圆点
+    if (isActive || showAll) {
+      [[ x1, y1 ], [ x2, y2 ]].forEach(([x, y]) => {
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = lineColor;
+        ctx.globalAlpha = alpha * 0.8;
+        ctx.fill();
+      });
+    }
+
+    // 线号标签（在线的中点显示）
+    if ((isActive || showAll) && alpha > 0.3) {
+      const labelX = (x1 + x2) / 2;
+      const labelY = midY + (y1 + y2 - 2 * midY) * 0.25;
+      // 标签背景
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#0d1117dd';
+      roundRect(ctx, labelX - 10, labelY - 8, 20, 16, 4);
+      ctx.fill();
+      // 标签文字
+      ctx.fillStyle = isChecked ? '#3fb950' : '#fff';
+      ctx.font = 'bold 10px Microsoft YaHei';
+      ctx.textAlign = 'center';
+      ctx.fillText(circleNums[w.wireNum - 1], labelX, labelY + 4);
+    }
+
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ==========================================
+// 面包板连通性提示
+// ==========================================
+function drawConnectivityHints() {
+  if (activeStep === 1 || activeStep === 4) {
+    // 行16 f~j 连通提示（3.3V 从 h列传递到 f列的VDD）
+    ctx.setLineDash([3, 3]);
+    const [fx, fy] = holeXY(16, 5);
+    const [hx, hy] = holeXY(16, 7);
+    ctx.strokeStyle = '#f0883e66';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 提示文字
+    ctx.fillStyle = '#f0883e';
+    ctx.font = '8px Microsoft YaHei';
+    ctx.textAlign = 'left';
+    ctx.fillText('← f~j 同行连通，VDD 自动得到 3.3V', hx + 14, hy + 3);
+  }
+}
+
+// ==========================================
+// 底部说明
+// ==========================================
+function drawFooter() {
+  const y0 = BB_Y + BB_H + 16;
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '11px Microsoft YaHei';
+  ctx.textAlign = 'left';
+
+  // 当前步骤提示
+  const stepNames = ['ESP32电源', '3.3V供电', 'MAX98357A功放', 'INMP441麦克风', '全部连线总览'];
+  ctx.fillText('当前高亮: 第' + (activeStep + 1) + '步 — ' + stepNames[activeStep], BB_X, y0);
+
+  // 面包板规则提示
+  ctx.fillStyle = '#f0883e'; ctx.font = '10px Microsoft YaHei';
+  ctx.fillText('面包板规则: 同行 a~e 五孔内部连通 | 同行 f~j 五孔内部连通 | 中间沟槽隔断左右', BB_X, y0 + 20);
+
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px Microsoft YaHei';
+  ctx.fillText('红色引脚 = 需要接线 | 橙色高亮 = 模块已插入的孔位 | 鼠标悬停任意位置查看详情', BB_X, y0 + 38);
+}
+
+// ==========================================
+// 初始化绘制
+// ==========================================
+draw();
+
+// ==========================================
+// 鼠标悬停提示
+// ==========================================
+const tooltip = document.getElementById('tooltip');
+
+cv.addEventListener('mousemove', e => {
+  const rect = cv.getBoundingClientRect();
+  // 鼠标在逻辑坐标系中的位置
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+  let found = '';
+
+  // 检测 ESP32 引脚
+  espUpper.concat(espLower).forEach(name => {
+    const [x, y] = espPinXY(name);
+    if (Math.hypot(mx - x, my - y) < 12) {
+      const dn = name === 'GND2' ? 'GND' : name;
+      let info = 'ESP32 引脚: ' + dn;
+      // 附加用途说明
+      const usage = {
+        'VIN': ' → 接面包板 +轨 提供 5V',
+        'GND': ' → 接面包板 −轨',
+        'GND2':' → 接面包板 −轨',
+        '3V3': ' → 接行16 h列，给麦克风VDD供3.3V',
+        'D14': ' → 接麦克风SCK（时钟）',
+        'D15': ' → 接麦克风WS（字选择）',
+        'D25': ' → 接功放DIN（数据输入）',
+        'D26': ' → 接功放BCLK（位时钟）',
+        'D27': ' → 接功放LRC（左右声道）',
+        'D32': ' → 接麦克风SD（数据输出）',
+      };
+      found = info + (usage[name] || '（本项目不使用）');
+    }
+  });
+
+  // 检测 MAX98357A 引脚
+  if (!found) {
+    MAX_PINS.forEach(p => {
+      const [x, y] = holeXY(p.row, p.ci);
+      if (Math.hypot(mx - x, my - y) < 10) {
+        found = 'MAX98357A ' + p.name + '（' + p.desc + '） → 面包板行' + p.row + ' a列';
+      }
+    });
+  }
+
+  // 检测 INMP441 引脚
+  if (!found) {
+    MIC_LEFT.forEach(p => {
+      const [x, y] = holeXY(p.row, p.ci);
+      if (Math.hypot(mx - x, my - y) < 10) {
+        found = 'INMP441 ' + p.name + '（' + p.desc + '） → 行' + p.row + ' e列（左半a~e连通）';
+      }
+    });
+    MIC_RIGHT.forEach(p => {
+      const [x, y] = holeXY(p.row, p.ci);
+      if (Math.hypot(mx - x, my - y) < 10) {
+        found = 'INMP441 ' + p.name + '（' + p.desc + '） → 行' + p.row + ' f列（右半f~j连通）';
+      }
+    });
+  }
+
+  // 检测连线
+  if (!found) {
+    WIRES.forEach(w => {
+      const [x1, y1] = wireXY(w.from);
+      const [x2, y2] = wireXY(w.to);
+      // 检测鼠标是否在线的中间区域
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      if (Math.hypot(mx - cx, my - cy) < 22) {
+        found = w.label + ' | 线材: ' + w.wireType;
+      }
+    });
+  }
+
+  if (found) {
+    tooltip.textContent = found;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 16) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+
+cv.addEventListener('mouseleave', () => {
+  tooltip.style.display = 'none';
+});
+
+// ==========================================
+// 步骤面板数据
+// ==========================================
+const stepsData = [
+  {
+    title: '第1步：ESP32 电源线',
+    badge: '2根·母对公',
+    wires: [0, 1], // WIRES 数组中的索引
+    body: `
+      <div class="tip blue">
+        <b>准备工具：</b>取出2根母对公杜邦线<br>
+        母头（有孔的一端）套在 ESP32 引脚上<br>
+        公头（有针的一端）插入面包板
+      </div>
+      <table class="wire-table">
+        <tr><th>线号</th><th>母头 → ESP32 引脚</th><th>公头 → 面包板</th><th>建议颜色</th></tr>
+        <tr><td>①</td><td><b>VIN</b>（上排左1）</td><td><b>+ 电源轨</b>任意孔</td><td style="color:#f85149">红色</td></tr>
+        <tr><td>②</td><td><b>GND</b>（上排左2）</td><td><b>− 电源轨</b>任意孔</td><td style="color:#6e7681">黑色</td></tr>
+      </table>
+      <div class="tip green">
+        完成后：面包板 +轨 = 5V，−轨 = GND<br>
+        这两条轨是所有模块共用的电源总线
+      </div>
+    `
+  },
+  {
+    title: '第2步：3.3V 给麦克风供电',
+    badge: '1根·母对公',
+    wires: [2],
+    body: `
+      <table class="wire-table">
+        <tr><th>线号</th><th>母头 → ESP32</th><th>公头 → 面包板</th><th>建议颜色</th></tr>
+        <tr><td>③</td><td><b>3V3</b>（下排左1）</td><td><b>行16 h列</b></td><td style="color:#f0883e">橙色</td></tr>
+      </table>
+      <div class="tip">
+        <b>为什么插行16 h列？</b><br>
+        因为 INMP441 的 VDD 引脚会插在行16 f列。<br>
+        面包板规则：同行 f~j 五孔连通 → f列 和 h列 自动接通！<br>
+        所以 VDD 不需要单独接线，直接就得到了 3.3V。
+      </div>
+      <div class="tip blue">
+        <b>重要：</b>麦克风用 <b>3.3V</b>，不是 5V！<br>
+        接错了会烧坏 INMP441！
+      </div>
+    `
+  },
+  {
+    title: '第3步：MAX98357A 功放',
+    badge: '插板+5根线',
+    wires: [3, 4, 5, 6, 7],
+    body: `
+      <div class="tip blue">
+        <b>第一件事：把模块插入面包板</b><br>
+        MAX98357A 的 7 个引脚<b>全部插入 a列</b>：<br>
+        行2=Vin, 行3=GND, 行4=SD, 行5=GAIN,<br>
+        行6=DIN, 行7=BCLK, 行8=LRC<br><br>
+        然后把喇叭的两根线拧进绿色螺丝端子，<b>拧紧</b>！
+      </div>
+      <p style="margin:8px 0;font-weight:600;">信号线（3根母对公）：</p>
+      <table class="wire-table">
+        <tr><th>线号</th><th>公头→面包板</th><th>母头→ESP32</th><th>颜色</th></tr>
+        <tr><td>④</td><td>行8 c列 (=LRC)</td><td><b>D27</b></td><td style="color:#3fb950">绿色</td></tr>
+        <tr><td>⑤</td><td>行7 c列 (=BCLK)</td><td><b>D26</b></td><td style="color:#3fb950">绿色</td></tr>
+        <tr><td>⑥</td><td>行6 c列 (=DIN)</td><td><b>D25</b></td><td style="color:#3fb950">绿色</td></tr>
+      </table>
+      <div class="tip">
+        <b>为什么插 c列？</b>因为模块插在 a列，a~e 同行连通，所以 c列和 a列是通的。
+      </div>
+      <p style="margin:8px 0;font-weight:600;">电源线（2根公对公跳线）：</p>
+      <table class="wire-table">
+        <tr><th>线号</th><th>从</th><th>到</th><th>颜色</th></tr>
+        <tr><td>⑦</td><td>行3 c列 (=GND)</td><td><b>−轨</b></td><td style="color:#6e7681">黑色</td></tr>
+        <tr><td>⑧</td><td>行2 c列 (=Vin)</td><td><b>+轨</b> (5V)</td><td style="color:#f85149">红色</td></tr>
+      </table>
+      <div class="tip green">行4(SD)、行5(GAIN) 什么都不接！空着就好。</div>
+    `
+  },
+  {
+    title: '第4步：INMP441 麦克风',
+    badge: '插板+5根线',
+    wires: [8, 9, 10, 11, 12],
+    body: `
+      <div class="tip blue">
+        <b>第一件事：把模块跨沟槽插入面包板</b><br>
+        INMP441 是圆板，有两排引脚。<br>
+        左排 3 脚插入 <b>e列</b>，右排 3 脚插入 <b>f列</b>：
+      </div>
+      <table class="wire-table">
+        <tr><th></th><th>左排 (e列)</th><th>右排 (f列)</th></tr>
+        <tr><td><b>行15</b></td><td>L/R</td><td>GND</td></tr>
+        <tr><td><b>行16</b></td><td>WS</td><td>VDD ← 自动得到3.3V!</td></tr>
+        <tr><td><b>行17</b></td><td>SCK</td><td>SD (数据)</td></tr>
+      </table>
+      <p style="margin:8px 0;font-weight:600;">信号线（3根母对公）：</p>
+      <table class="wire-table">
+        <tr><th>线号</th><th>公头→面包板</th><th>母头→ESP32</th><th>颜色</th></tr>
+        <tr><td>⑨</td><td>行17 d列 (=SCK)</td><td><b>D14</b></td><td style="color:#58a6ff">蓝色</td></tr>
+        <tr><td>⑩</td><td>行16 d列 (=WS)</td><td><b>D15</b></td><td style="color:#58a6ff">蓝色</td></tr>
+        <tr><td>⑪</td><td>行17 h列 (=SD)</td><td><b>D32</b></td><td style="color:#58a6ff">蓝色</td></tr>
+      </table>
+      <p style="margin:8px 0;font-weight:600;">接地线（2根公对公跳线）：</p>
+      <table class="wire-table">
+        <tr><th>线号</th><th>从</th><th>到</th><th>颜色</th></tr>
+        <tr><td>⑫</td><td>行15 h列 (=GND)</td><td><b>−轨</b></td><td style="color:#6e7681">黑色</td></tr>
+        <tr><td>⑬</td><td>行15 d列 (=L/R)</td><td><b>−轨</b></td><td style="color:#6e7681">黑色</td></tr>
+      </table>
+      <div class="tip">
+        <b>L/R 接地 = 选择左声道。</b>如果悬空（不接）则选择右声道。
+      </div>
+      <div class="tip green">
+        VDD 不用接线！第2步已经在行16 h列接了3.3V，<br>
+        和 VDD(行16 f列) 同行右半连通！
+      </div>
+    `
+  },
+  {
+    title: '第5步：检查总览 & 上电测试',
+    badge: '检查',
+    wires: [],
+    body: `
+      <p style="font-weight:600;margin-bottom:8px;">左边图表现在显示全部13根线。逐条核对：</p>
+      <div class="tip">
+        <b>检查清单：</b><br>
+        1. MAX98357A Vin 接的是 <b>+轨(5V)</b><br>
+        2. INMP441 VDD 得到的是 <b>3.3V</b>（不是5V！）<br>
+        3. INMP441 L/R 和 GND 都接了 <b>−轨</b><br>
+        4. 喇叭线<b>拧紧</b>了<br>
+        5. 没有短路（相邻引脚之间没有接触）
+      </div>
+      <div class="tip green">
+        <b>上电测试：</b><br>
+        1. USB 线插入 ESP32<br>
+        2. 听到喇叭 "嘟" 一声 → 功放正确<br>
+        3. 串口监视器显示 WiFi 连接成功 → 全部OK<br>
+        4. 打开 http://你的电脑IP:8081 开始语音对话！
+      </div>
+    `
+  },
+];
+
+// ==========================================
+// 生成步骤面板 HTML
+// ==========================================
+const stepsContainer = document.getElementById('stepsContainer');
+
+stepsData.forEach((step, si) => {
+  const card = document.createElement('div');
+  card.className = 'step-card' + (si === 0 ? ' active' : '');
+  card.dataset.step = si;
+
+  // 头部（点击切换步骤）
+  let headerHTML = `
+    <div class="step-header" onclick="setStep(${si})">
+      <div class="step-num">${si + 1}</div>
+      <div class="step-title">${step.title}</div>
+      <div class="step-badge">${step.badge}</div>
+    </div>
+  `;
+
+  // 主体内容
+  let bodyHTML = '<div class="step-body">' + step.body;
+
+  // 每根线的勾选框（只在有线的步骤中显示）
+  if (step.wires.length > 0) {
+    bodyHTML += '<div style="margin-top:10px;font-weight:600;font-size:12px;color:#8b949e;">接好一根，勾一根：</div>';
+    step.wires.forEach(wi => {
+      const w = WIRES[wi];
+      bodyHTML += `
+        <label class="wire-check" id="wc_${wi}" onclick="event.stopPropagation()">
+          <input type="checkbox" onchange="toggleWire(${wi}, this.checked)">
+          <span class="wdot" style="background:${w.color}"></span>
+          ${circleNums[w.wireNum - 1]} ${w.label.replace(/^线[①-⑬]\s*/, '')}
+          <span style="color:#6e7681;margin-left:auto;font-size:11px;">${w.wireType}</span>
+        </label>
+      `;
+    });
+  }
+
+  bodyHTML += '</div>';
+  card.innerHTML = headerHTML + bodyHTML;
+  stepsContainer.appendChild(card);
+});
+
+// ==========================================
+// 步骤切换
+// ==========================================
+function setStep(idx) {
+  activeStep = idx;
+  document.querySelectorAll('.step-card').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+  draw();
+}
+
+// ==========================================
+// 接线勾选
+// ==========================================
+function toggleWire(wireIdx, checked) {
+  checkedWires[wireIdx] = checked;
+  // 更新该行样式
+  const el = document.getElementById('wc_' + wireIdx);
+  if (el) el.classList.toggle('checked', checked);
+  // 更新进度
+  updateProgress();
+  // 重绘
+  draw();
+}
+
+function updateProgress() {
+  const total = 13;
+  const done = Object.values(checkedWires).filter(Boolean).length;
+  const pct = Math.round(done / total * 100);
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressText').textContent = '已完成 ' + done + ' / ' + total + ' 根线';
+
+  // 检查每个步骤是否完成
+  stepsData.forEach((step, si) => {
+    const card = document.querySelectorAll('.step-card')[si];
+    if (step.wires.length > 0) {
+      const allDone = step.wires.every(wi => checkedWires[wi]);
+      card.classList.toggle('done', allDone);
+    }
+  });
+}
+
+// ==========================================
+// 组件信息弹窗
+// ==========================================
+function showCompInfo(comp) {
+  const infoEl = document.getElementById('compInfo');
+  const data = {
+    esp32: {
+      title: 'ESP32-WROOM-32 开发板',
+      color: '#3fb950',
+      content: `
+        <p><b>角色：</b>项目的大脑，运行固件，处理音频和WiFi通信</p>
+        <p><b>供电：</b>USB线供电（同时也是烧录固件用的）</p>
+        <p><b>安装方式：</b>悬空！不插面包板（板子太宽了放不下）</p>
+        <p><b>本项目使用的引脚：</b></p>
+        <table class="wire-table">
+          <tr><th>引脚</th><th>用途</th></tr>
+          <tr><td>VIN</td><td>输出 5V 到面包板+轨</td></tr>
+          <tr><td>GND</td><td>接地到面包板−轨</td></tr>
+          <tr><td>3V3</td><td>输出 3.3V 给麦克风供电</td></tr>
+          <tr><td>D14</td><td>麦克风 SCK（时钟）</td></tr>
+          <tr><td>D15</td><td>麦克风 WS（字选择）</td></tr>
+          <tr><td>D32</td><td>麦克风 SD（数据输入）</td></tr>
+          <tr><td>D25</td><td>功放 DIN（数据输出）</td></tr>
+          <tr><td>D26</td><td>功放 BCLK（位时钟）</td></tr>
+          <tr><td>D27</td><td>功放 LRC（左右声道）</td></tr>
+        </table>
+      `
+    },
+    max: {
+      title: 'MAX98357A I2S 功放模块',
+      color: '#a371f7',
+      content: `
+        <p><b>角色：</b>把 ESP32 的 I2S 数字音频信号转成模拟音频，驱动喇叭发声</p>
+        <p><b>供电：</b>5V（从面包板+轨获取）</p>
+        <p><b>安装方式：</b>单排引脚插入面包板 a列（行2~行8）</p>
+        <p><b>引脚说明：</b></p>
+        <table class="wire-table">
+          <tr><th>引脚</th><th>说明</th><th>接法</th></tr>
+          <tr><td>Vin</td><td>5V电源</td><td>→ +轨</td></tr>
+          <tr><td>GND</td><td>接地</td><td>→ −轨</td></tr>
+          <tr><td>SD</td><td>关断引脚</td><td>不接</td></tr>
+          <tr><td>GAIN</td><td>增益选择</td><td>不接(默认9dB)</td></tr>
+          <tr><td>DIN</td><td>音频数据</td><td>→ ESP32 D25</td></tr>
+          <tr><td>BCLK</td><td>位时钟</td><td>→ ESP32 D26</td></tr>
+          <tr><td>LRC</td><td>左右声道</td><td>→ ESP32 D27</td></tr>
+        </table>
+        <p><b>喇叭：</b>两根线拧进绿色螺丝端子，不分正负</p>
+      `
+    },
+    mic: {
+      title: 'INMP441 I2S 麦克风',
+      color: '#58a6ff',
+      content: `
+        <p><b>角色：</b>采集声音，转成 I2S 数字信号给 ESP32</p>
+        <p><b>供电：</b>3.3V（从ESP32的3V3引脚获取）</p>
+        <p><b>安装方式：</b>圆板跨沟槽插入面包板（左排 e列，右排 f列）</p>
+        <p><b>引脚说明（两排各3个）：</b></p>
+        <table class="wire-table">
+          <tr><th>左排(e列)</th><th>右排(f列)</th></tr>
+          <tr><td>行15: <b>L/R</b> → 接GND(选左声道)</td><td>行15: <b>GND</b> → 接−轨</td></tr>
+          <tr><td>行16: <b>WS</b> → ESP32 D15</td><td>行16: <b>VDD</b> → 自动得到3.3V</td></tr>
+          <tr><td>行17: <b>SCK</b> → ESP32 D14</td><td>行17: <b>SD</b> → ESP32 D32</td></tr>
+        </table>
+        <div class="tip">
+          <b>如何确认引脚方向？</b><br>
+          看圆板正面的丝印标注（小字），找到 GND 和 VDD 的位置，<br>
+          确保它们分别在行15右排(f列)和行16右排(f列)。
+        </div>
+      `
+    },
+  };
+
+  const d = data[comp];
+  if (infoEl.style.display === 'block' && infoEl.dataset.comp === comp) {
+    infoEl.style.display = 'none';
+    return;
+  }
+  infoEl.dataset.comp = comp;
+  infoEl.style.display = 'block';
+  infoEl.innerHTML = `
+    <div style="background:#21262d;border:1px solid ${d.color}44;border-radius:8px;padding:12px;margin-bottom:8px;">
+      <div style="font-size:14px;font-weight:600;color:${d.color};margin-bottom:8px;">${d.title}</div>
+      <div style="font-size:12px;line-height:1.8;color:#c9d1d9;">${d.content}</div>
+    </div>
+  `;
+}
+
+// ==========================================
+// 键盘快捷键（←→切换步骤）
+// ==========================================
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    setStep(Math.min(activeStep + 1, stepsData.length - 1));
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    setStep(Math.max(activeStep - 1, 0));
+  }
+});
+</script>
+</body>
+</html>

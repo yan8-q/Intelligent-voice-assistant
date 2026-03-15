@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智能语音助手</title>
+  <style>
+    /* ===== 基础样式 ===== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "Microsoft YaHei", sans-serif;
+      background: #0a0e17;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
+      color: #4fc3f7;
+    }
+
+    /* ===== 状态面板 ===== */
+    .status-panel {
+      background: #141b2d;
+      border: 1px solid #1e3a5f;
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 700px;
+      margin-bottom: 20px;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #1e2a3f;
+    }
+    .status-row:last-child { border-bottom: none; }
+
+    .status-label { color: #90a4ae; font-size: 14px; }
+    .status-value { font-weight: bold; }
+    .status-ok { color: #66bb6a; }
+    .status-err { color: #ef5350; }
+    .status-wait { color: #ffa726; }
+
+    /* ===== ASR 实时显示 ===== */
+    .asr-panel {
+      background: #141b2d;
+      border: 1px solid #1e3a5f;
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 700px;
+      margin-bottom: 20px;
+    }
+
+    .asr-partial {
+      font-size: 18px;
+      color: #81d4fa;
+      min-height: 30px;
+      padding: 10px;
+      background: #0d1421;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      word-break: break-all;
+    }
+
+    /* ===== 对话历史 ===== */
+    .chat-history {
+      background: #141b2d;
+      border: 1px solid #1e3a5f;
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 700px;
+      max-height: 400px;
+      overflow-y: auto;
+      margin-bottom: 20px;
+    }
+
+    .chat-msg {
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .chat-user {
+      background: #1a237e;
+      color: #90caf9;
+    }
+    .chat-ai {
+      background: #1b5e20;
+      color: #a5d6a7;
+    }
+    .chat-sys {
+      background: #263238;
+      color: #78909c;
+      font-style: italic;
+    }
+
+    /* ===== 手动输入 ===== */
+    .input-panel {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+      max-width: 700px;
+      margin-bottom: 20px;
+    }
+    .input-panel input {
+      flex: 1;
+      padding: 12px 16px;
+      background: #1a2332;
+      border: 1px solid #2a3f5f;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 16px;
+      outline: none;
+    }
+    .input-panel input:focus {
+      border-color: #4fc3f7;
+    }
+    .input-panel button {
+      padding: 12px 24px;
+      background: #1565c0;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .input-panel button:hover {
+      background: #1976d2;
+    }
+
+    /* ===== 脉冲动画（正在说话时） ===== */
+    .pulse {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #66bb6a;
+      margin-right: 8px;
+      animation: pulse-anim 1s infinite;
+    }
+    @keyframes pulse-anim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.3); }
+    }
+  </style>
+</head>
+<body>
+  <h1>智能语音助手</h1>
+
+  <!-- 状态面板 -->
+  <div class="status-panel">
+    <div class="status-row">
+      <span class="status-label">WebSocket 连接</span>
+      <span id="ws-status" class="status-value status-wait">连接中...</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">ESP32 状态</span>
+      <span id="esp32-status" class="status-value status-wait">等待连接</span>
+    </div>
+  </div>
+
+  <!-- ASR 实时显示 -->
+  <div class="asr-panel">
+    <div style="font-size: 14px; color: #78909c; margin-bottom: 8px;">实时语音识别</div>
+    <div class="asr-partial" id="asr-partial">等待语音输入...</div>
+  </div>
+
+  <!-- 对话历史 -->
+  <div class="chat-history" id="chat-history">
+    <div class="chat-msg chat-sys">系统已启动，等待语音输入或手动输入文字...</div>
+  </div>
+
+  <!-- 手动输入（不需要 ESP32 也能测试） -->
+  <div class="input-panel">
+    <input type="text" id="text-input" placeholder="手动输入文字消息（回车发送）" />
+    <button id="send-btn">发送</button>
+  </div>
+
+  <script>
+    // ===== DOM 元素 =====
+    const wsStatusEl = document.getElementById('ws-status');
+    const esp32StatusEl = document.getElementById('esp32-status');
+    const asrPartialEl = document.getElementById('asr-partial');
+    const chatHistoryEl = document.getElementById('chat-history');
+    const textInput = document.getElementById('text-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    // ===== WebSocket 连接 =====
+    let ws = null;
+
+    function connectWS() {
+      // 连接 /ws_ui 获取 ASR 和 AI 状态推送
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}/ws_ui`);
+
+      ws.onopen = () => {
+        wsStatusEl.textContent = '已连接';
+        wsStatusEl.className = 'status-value status-ok';
+      };
+
+      ws.onclose = () => {
+        wsStatusEl.textContent = '已断开';
+        wsStatusEl.className = 'status-value status-err';
+        // 3 秒后自动重连
+        setTimeout(connectWS, 3000);
+      };
+
+      ws.onerror = () => {
+        wsStatusEl.textContent = '连接错误';
+        wsStatusEl.className = 'status-value status-err';
+      };
+
+      ws.onmessage = (event) => {
+        const data = event.data;
+
+        if (data.startsWith('PARTIAL:')) {
+          // ASR 中间结果（实时更新）
+          const text = data.substring(8);
+          asrPartialEl.textContent = text || '等待语音输入...';
+          if (text) {
+            asrPartialEl.style.color = '#81d4fa';
+          }
+        }
+        else if (data.startsWith('FINAL:')) {
+          // ASR 最终结果 / AI 回复
+          const text = data.substring(6);
+          asrPartialEl.textContent = '等待语音输入...';
+          asrPartialEl.style.color = '#546e7a';
+
+          if (text.startsWith('[AI] ')) {
+            // AI 回复
+            addChatMsg(text.substring(5), 'ai');
+          } else {
+            // 用户语音
+            addChatMsg(text, 'user');
+          }
+        }
+        else if (data.startsWith('INIT:')) {
+          // 初始状态
+          try {
+            const init = JSON.parse(data.substring(5));
+            if (init.partial) {
+              asrPartialEl.textContent = init.partial;
+            }
+          } catch(e) {}
+          esp32StatusEl.textContent = '已连接';
+          esp32StatusEl.className = 'status-value status-ok';
+        }
+      };
+    }
+
+    // ===== 对话历史 =====
+    function addChatMsg(text, type) {
+      const div = document.createElement('div');
+      div.className = `chat-msg chat-${type}`;
+      const prefix = type === 'user' ? '🗣 ' : (type === 'ai' ? '🤖 ' : '');
+      div.textContent = prefix + text;
+      chatHistoryEl.appendChild(div);
+      // 自动滚动到底部
+      chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+    }
+
+    // ===== 手动发送文字 =====
+    async function sendText() {
+      const text = textInput.value.trim();
+      if (!text) return;
+
+      addChatMsg(text, 'user');
+      textInput.value = '';
+
+      try {
+        const resp = await fetch(`/api/chat?text=${encodeURIComponent(text)}`);
+        if (!resp.ok) {
+          addChatMsg('发送失败: ' + resp.statusText, 'sys');
+        }
+      } catch(e) {
+        addChatMsg('网络错误: ' + e.message, 'sys');
+      }
+    }
+
+    sendBtn.addEventListener('click', sendText);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendText();
+    });
+
+    // ===== 启动 =====
+    connectWS();
+  </script>
+</body>
+</html>
