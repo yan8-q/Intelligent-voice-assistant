@@ -296,9 +296,18 @@ async def _speak_text_to_broadcast(text: str, voice: str, instruction: Optional[
         if not text or not text.strip():
             return
 
-        # 文本 → WAV 文件
-        tts_engine.tts_to_wav(text=text, voice=voice, instruction=instruction,
-                              out_path=str(wav_path), model=model)
+        # 文本 → WAV 文件（放线程池，避免阻塞事件循环 2-5 秒）
+        # 教学说明：tts_to_wav() 是同步阻塞调用（内部建立连接+合成语音）
+        # 如果直接 await，整个事件循环冻结 → 音频广播停滞 → ESP32 缓冲区播空
+        # run_in_executor 把阻塞操作放到线程池，事件循环继续运转
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: tts_engine.tts_to_wav(
+                text=text, voice=voice, instruction=instruction,
+                out_path=str(wav_path), model=model
+            )
+        )
 
         # WAV → PCM bytes
         with wave.open(str(wav_path), "rb") as wf:
@@ -354,11 +363,17 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
     4. 异步任务把音频块广播给 ESP32
     """
     from dashscope.audio.tts_v2 import AudioFormat, SpeechSynthesizer, ResultCallback
-    import queue
     import threading
 
     # 音频数据队列：TTS 回调（后台线程）→ 队列 → 异步广播
-    audio_queue: queue.Queue[Optional[bytes]] = queue.Queue()
+    # 教学说明（为什么用 asyncio.Queue 而不是 queue.Queue）：
+    # queue.Queue 是同步队列，在 async 函数里只能用 get_nowait() + sleep(0.01) 轮询
+    # 这意味着 TTS 回调放入数据后，最多等 10ms 才被取出 → 微小延迟累积 → 卡顿
+    # asyncio.Queue 的 await get() 会在数据到来瞬间唤醒，延迟接近 0
+    # 关键陷阱：TTS 回调运行在 SDK 后台线程，不能直接调 asyncio.Queue.put()
+    # 解决：用 loop.call_soon_threadsafe() 跨线程安全放入
+    _main_loop = asyncio.get_running_loop()  # 捕获当前事件循环引用
+    audio_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
     tts_done = threading.Event()
     tts_error = [None]
 
@@ -366,20 +381,23 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
     _first_audio_time = [None]
 
     class StreamCallback(ResultCallback):
-        """TTS 流式回调：接收 PCM 音频数据"""
+        """TTS 流式回调：接收 PCM 音频数据（在 SDK 后台线程中运行）"""
         def on_data(self, data: bytes):
             if data:
                 if _first_audio_time[0] is None:
                     _first_audio_time[0] = time.time()
-                audio_queue.put(data)
+                # 教学说明：call_soon_threadsafe 是跨线程操作 asyncio 的标准方法
+                # 后台线程不能直接调 asyncio.Queue.put()（没有运行中的事件循环）
+                # call_soon_threadsafe 把操作安全地调度到事件循环线程执行
+                _main_loop.call_soon_threadsafe(audio_queue.put_nowait, data)
 
         def on_complete(self):
-            audio_queue.put(None)  # 发送结束信号
+            _main_loop.call_soon_threadsafe(audio_queue.put_nowait, None)
             tts_done.set()
 
         def on_error(self, msg):
             tts_error[0] = str(msg)
-            audio_queue.put(None)
+            _main_loop.call_soon_threadsafe(audio_queue.put_nowait, None)
             tts_done.set()
 
     callback = StreamCallback()
@@ -411,10 +429,15 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
     # RobotDuck cosyvoice.py 用 MIN=28/MAX=90/WAIT=0.9（通用保守值）
     # RobotDuck app_main.py 用 MIN=12/MAX=60/WAIT=0.5（实际优化值）
     # 我们之前误用了 cosyvoice.py 的保守值，导致后续分块太大、延迟高
-    FIRST_MIN_CHARS = 6  # 首句：攒 6 个字就发（快速开口）
-    LATER_MIN_CHARS = 12 # 后续：攒 12 个字再发（对齐 RobotDuck app_main 优化值）
-    MAX_CHARS = 60       # 最多 60 字必须发（从 80 降低，更频繁发送减少间隙）
-    MAX_WAIT = 0.5       # 最长等 0.5 秒（从 0.8 降低，兜底更快）
+    FIRST_MIN_CHARS = 6  # 首句：攒 6 个字就发（快速开口，首响延迟最重要）
+    LATER_MIN_CHARS = 20 # 后续：攒 20 个字再发（减少 streaming_call 次数，降低分块间隙）
+    MAX_CHARS = 80       # 最多 80 字必须发（配合后续块加大）
+    MAX_WAIT = 0.8       # 最长等 0.8 秒（让块更饱满，减少碎片化）
+    # 教学说明（分块策略优化思路）：
+    # 每次 streaming_call() 有 200-500ms 处理开销（TTS 服务端初始化+合成）
+    # 块越多 → 间隙越多 → ESP32 缓冲区越容易被播空 → 卡顿
+    # 所以后续块加大（12→20），减少调用次数，总间隙大幅缩短
+    # 首句保持小块（6字）不变，确保快速开口
     PUNCT = set("。！？!?；;\n，,：:")  # 添加逗号冒号（中文最常见的断句点！）
 
     buf = ""
@@ -465,13 +488,11 @@ async def _speak_stream_to_broadcast(text_stream, voice: str, instruction: Optio
     _first_audio_broadcast = [False]
 
     async def process_audio():
+        # 教学说明：改用 await audio_queue.get() 后，数据到来瞬间唤醒
+        # 之前用 get_nowait() + sleep(0.01) 最多延迟 10ms，现在延迟接近 0
         while True:
             try:
-                try:
-                    audio_data = audio_queue.get_nowait()
-                except queue.Empty:
-                    await asyncio.sleep(0.01)
-                    continue
+                audio_data = await audio_queue.get()
 
                 if audio_data is None:
                     break

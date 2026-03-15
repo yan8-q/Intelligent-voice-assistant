@@ -66,9 +66,9 @@ const uint16_t SERVER_PORT = 8081;
 //   HTTP任务 → 写入缓冲区 → I2S任务从缓冲区读取
 // 好处：HTTP 网络抖动不会直接影响 I2S 播放连续性
 
-#define RING_BUF_SIZE    8192   // 8KB ≈ 256ms @16kHz mono16
+#define RING_BUF_SIZE    16384  // 16KB ≈ 512ms @16kHz mono16（从8KB扩大，吸收TTS分块间隙）
 #define AUDIO_CHUNK_SIZE 320    // 每块 10ms @16kHz = 320 字节
-#define PREBUFFER_MS     40     // 预缓冲 40ms 再开始播放
+#define PREBUFFER_MS     100    // 预缓冲 100ms 再开始播放（从40ms增大，减少开头卡顿）
 
 // 环形缓冲区结构体
 typedef struct {
@@ -151,12 +151,15 @@ void ringBufClear() {
 // 加 0.7 增益防止削波失真
 
 static inline void mono16_to_stereo32(const int16_t* in, size_t nSamp,
-                                       int32_t* outLR, float gain = 0.7f) {
+                                       int32_t* outLR, int gain256 = 179) {
+  // 教学说明（整数近似浮点，嵌入式常见优化技巧）：
+  // 0.7 的增益用整数近似：乘以 179 再右移 8 位（÷256）
+  // 179/256 = 0.69921875 ≈ 0.7，误差 < 0.12%，人耳完全听不出
+  // 整数乘法+移位比浮点乘法快 3-5 倍（ESP32 的 FPU 不擅长高频调用）
+  // gain256 参数：传 256 = 增益1.0，传 179 = 增益0.7
   for (size_t i = 0; i < nSamp; i++) {
-    int32_t s = (int32_t)((float)in[i] * gain);
-    // 限幅防止溢出
-    if (s > 32767) s = 32767;
-    if (s < -32768) s = -32768;
+    int32_t s = ((int32_t)in[i] * gain256) >> 8;
+    // 无需限幅：int16 最大值 32767 × 256 = 8388352 >> 8 = 32767，不会溢出
     int32_t v32 = s << 16;          // 放到高 16 位（MSB对齐）
     outLR[i * 2]     = v32;         // 左声道
     outLR[i * 2 + 1] = v32;         // 右声道（复制）
@@ -277,7 +280,7 @@ void play_boot_beep() {
       mono[j] = (int16_t)(16000 * sin(2.0 * PI * freq * t));
     }
     // 转换为 32bit stereo
-    mono16_to_stereo32(mono, count, stereo, 1.0f);
+    mono16_to_stereo32(mono, count, stereo, 256);  // gain=1.0 → 256/256
     // 写入 I2S
     size_t bw = 0;
     i2s_write(I2S_NUM_1, stereo, count * 2 * sizeof(int32_t), &bw, portMAX_DELAY);
@@ -392,6 +395,11 @@ void taskHttpRead(void* param) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
       }
+
+      // 禁用 Nagle 算法：小包立即发送，ACK 更快返回
+      // 教学说明：Nagle 算法会把小数据包合并后再发送（最多等200ms）
+      // 对音频流来说，我们希望每个 ACK 尽快发出，让服务端更快送下一个包
+      cli.setNoDelay(true);
 
       // 教学重点：用 HTTP/1.0 避免 chunked 编码！
       // HTTP/1.1 的 chunked 编码会在音频数据中插入分块头
@@ -535,14 +543,14 @@ void taskI2SPlay(void* param) {
       }
 
       // ---- mono16 → stereo32 转换 ----
-      mono16_to_stereo32(samples, nSamp, outLR, 0.7f);
+      mono16_to_stereo32(samples, nSamp, outLR);  // 默认 gain256=179 ≈ 0.7
 
       // ---- 写入 I2S ----
       size_t totalBytes = nSamp * 2 * sizeof(int32_t);
       size_t offset = 0;
       while (offset < totalBytes && i2sPlayRunning) {
         size_t written = 0;
-        i2s_write(I2S_NUM_1, (uint8_t*)outLR + offset, totalBytes - offset, &written, pdMS_TO_TICKS(50));
+        i2s_write(I2S_NUM_1, (uint8_t*)outLR + offset, totalBytes - offset, &written, pdMS_TO_TICKS(20));  // 从50ms缩短到20ms，减少异常时阻塞
         if (written > 0) {
           offset += written;
         } else {
